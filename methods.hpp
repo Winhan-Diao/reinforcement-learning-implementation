@@ -85,7 +85,42 @@ public:
         }
         return;
     }
-    friend int main();
+template <class _MultiplyFunctor>
+class Sarsa {
+    std::vector<std::vector<double>> qValues;
+    std::vector<std::vector<double>> policies;
+    std::vector<std::vector<size_t>> ns;
+    const Playground& playground;
+    size_t episodeLength;
+    double discount;
+    double epsilon;
+    _MultiplyFunctor alphaFunctor;
+public:
+    Sarsa(const Playground& playground, size_t episodeLength,  double discount, double epsilon, _MultiplyFunctor&& alphaFunctor)
+        : qValues(playground.height * playground.width, std::vector<double>(size_t(5), 0.))
+        , policies(playground.height * playground.width, toEGreedy(std::vector<double>{0, 0, 0, 0, 1}, epsilon))
+        , ns(playground.height * playground.width, std::vector<size_t>(5, 0))
+        , playground(playground) 
+        , episodeLength(episodeLength)
+        , discount(discount)
+        , epsilon(epsilon)
+        , alphaFunctor(std::forward<_MultiplyFunctor>(alphaFunctor))
+    {}
+    void run() { run(this->epsilon); }
+    void run(double epsilon) {
+        AbstractBlock *currentState = playground.sample();
+        // AbstractBlock *currentState = playground.map[0].get();
+        size_t p = chooseAction(policies[currentState->getFlatten()], playground.gen);
+        for (size_t i = 0; i < episodeLength; ++i) {
+            auto [nextState, reward] = playground.act(currentState, static_cast<ActionType>(p));
+            size_t nextP = chooseAction(policies[nextState->getFlatten()], playground.gen);
+            qValues[currentState->getFlatten()][p] += alphaFunctor(++ns[currentState->getFlatten()][p]) * (reward + discount * qValues[nextState->getFlatten()][nextP] - qValues[currentState->getFlatten()][p]);
+            toEGreedy(policies[currentState->getFlatten()], 5, std::distance(qValues[currentState->getFlatten()].cbegin(), std::max_element(qValues[currentState->getFlatten()].cbegin(), qValues[currentState->getFlatten()].cend())), epsilon);
+            currentState = nextState;
+            p = nextP;
+        }
+    }
+    friend void sarsaDemo();
 };
 
 inline void showPolicy(const std::vector<std::vector<double>>& policy, const Playground& playground, std::ostream& os = std::cout) {
