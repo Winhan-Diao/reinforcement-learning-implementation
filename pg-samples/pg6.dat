@@ -1,0 +1,21 @@
+Maze (Forbbiden)
+<playground>
+<height>
+10
+</height>
+<width>
+10
+</width>
+<map>
+. . . . . . . . . O
+X X X X X X . . . .
+. . . . . X . X X X
+. . . X . . . X . .
+X X . X . X . X . .
+X . . X . X . . . .
+X . X . . X X X . .
+. . X X . X . . . .
+X . . X X X . X X .
+X . . . . . . X . .
+</map>
+</playground>
