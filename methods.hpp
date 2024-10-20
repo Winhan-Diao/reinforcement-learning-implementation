@@ -7,10 +7,47 @@
 
 inline void foo() {}
 
+template <class T>
+inline auto toEGreedy(T&& policy, double eposilon) -> decltype(std::forward<T>(policy)) {
+    auto size = policy.size();
+    auto iter = std::max_element(policy.begin(), policy.end());
+    std::for_each(policy.begin(), policy.end(), [&iter, size, eposilon](auto& v){
+        if (&*iter == &v) {
+            v = 1 - double(size - 1) / size * eposilon;
+        } else {
+            v = 1. / size * eposilon;
+        }
+    });
+    return std::forward<T>(policy);
+}
+inline std::vector<double> toEGreedy(size_t policyCount, size_t maxargIndex, double eposilon) {
+    double star = 1 - double(policyCount - 1) / policyCount * eposilon;
+    double other = 1. / policyCount * eposilon;
+    std::vector<double> tmp(policyCount, other);
+    tmp[maxargIndex] = star;
+    return tmp;
+}
+inline void toEGreedy(std::vector<double>& policy, size_t policyCount, size_t maxargIndex, double eposilon) {
+    assert(policy.size() == policyCount);
+    double star = 1 - double(policyCount - 1) / policyCount * eposilon;
+    double other = 1. / policyCount * eposilon;
+    for (size_t i = 0; i < policyCount; ++i) {
+        policy[i] = i == maxargIndex? star: other;
+    }
+}
+
 struct Step {
     AbstractBlock *state;
     ActionType action;
     double reward;
+};
+
+struct Experience {
+    AbstractBlock *state;
+    ActionType action;
+    double reward;
+    AbstractBlock *nextState;
+    ActionType nextAction;
 };
 
 template <class _MultiplyFunctor>
@@ -25,37 +62,9 @@ class EGreedyMonteCarlo {
     _MultiplyFunctor alphaFunctor;
 
 public:
-    template <class T>
-    static auto toEGreedy(T&& policy, double eposilon) -> decltype(std::forward<T>(policy)) {
-        auto size = policy.size();
-        auto iter = std::max_element(policy.begin(), policy.end());
-        std::for_each(policy.begin(), policy.end(), [&iter, size, eposilon](auto& v){
-            if (&*iter == &v) {
-                v = 1 - double(size - 1) / size * eposilon;
-            } else {
-                v = 1. / size * eposilon;
-            }
-        });
-        return std::forward<T>(policy);
-    }
-    static std::vector<double> toEGreedy(size_t policyCount, size_t maxargIndex, double eposilon) {
-        double star = 1 - double(policyCount - 1) / policyCount * eposilon;
-        double other = 1. / policyCount * eposilon;
-        std::vector<double> tmp(policyCount, other);
-        tmp[maxargIndex] = star;
-        return tmp;
-    }
-    static void toEGreedy(std::vector<double>& policy, size_t policyCount, size_t maxargIndex, double eposilon) {
-        assert(policy.size() == policyCount);
-        double star = 1 - double(policyCount - 1) / policyCount * eposilon;
-        double other = 1. / policyCount * eposilon;
-        for (size_t i = 0; i < policyCount; ++i) {
-            policy[i] = i == maxargIndex? star: other;
-        }
-    }
     EGreedyMonteCarlo(const Playground& playground, size_t episodeLength, double discount, double epsilon, _MultiplyFunctor&& alphaFunctor)
         : qValues(playground.height * playground.width, std::vector<double>(size_t(5), double(0)))
-        , policies(playground.height * playground.width, this->toEGreedy(std::vector<double>{0, 0, 0, 0, 1}, epsilon))
+        , policies(playground.height * playground.width, toEGreedy(std::vector<double>{0, 0, 0, 0, 1}, epsilon))
         , ns(playground.height * playground.width, std::vector<size_t>(5, 0))
         , playground(playground) 
         , episodeLength(episodeLength)
@@ -71,7 +80,7 @@ public:
         AbstractBlock *currentState = playground.sample();
         // AbstractBlock *currentState = playground.map[playground.width - 1].get();
         for (size_t i = 0; i < episodeLength; ++i) {
-            size_t p = choosePolicy(policies[currentState->getFlatten()], playground.gen);
+            size_t p = chooseAction(policies[currentState->getFlatten()], playground.gen);
             auto [nextState, reward] = playground.act(currentState, static_cast<ActionType>(p));
             episode.push_back(Step{currentState, static_cast<ActionType>(p), reward});
             currentState = nextState;
@@ -85,6 +94,9 @@ public:
         }
         return;
     }
+    friend void mcDemo();
+};
+
 template <class _MultiplyFunctor>
 class Sarsa {
     std::vector<std::vector<double>> qValues;
@@ -152,3 +164,4 @@ inline void showPolicy(const std::vector<std::vector<double>>& policy, const Pla
         std::cout << "\r\n";
     }
 }
+
