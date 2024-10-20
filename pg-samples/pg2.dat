@@ -1,0 +1,17 @@
+Go straight or go around?
+<playground>
+<height>
+6
+</height>
+<width>
+5
+</width>
+<map>
+. / . O *
+. . . * *
+. / / * *
+* / / * *
+. / / * *
+. / / * *
+</map>
+</playground>

@@ -1,0 +1,15 @@
+Converge Test 1
+<playground>
+<height>
+4
+</height>
+<width>
+4
+</width>
+<map>
+. . . O
+. * * .
+. * * .
+. . . .
+</map>
+</playground>
