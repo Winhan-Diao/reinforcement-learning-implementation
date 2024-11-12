@@ -4,33 +4,35 @@
 #include <cassert>
 #include "playground.hpp"
 #include "random_utils.hpp"
+#include "neural/network.hpp"
+#define ACTION_COUNTS 5
 
 inline void foo() {}
 
 template <class T>
-inline auto toEGreedy(T&& policy, double eposilon) -> decltype(std::forward<T>(policy)) {
+inline auto toEGreedy(T&& policy, double epsilon) -> decltype(std::forward<T>(policy)) {
     auto size = policy.size();
     auto iter = std::max_element(policy.begin(), policy.end());
-    std::for_each(policy.begin(), policy.end(), [&iter, size, eposilon](auto& v){
+    std::for_each(policy.begin(), policy.end(), [&iter, size, epsilon](auto& v){
         if (&*iter == &v) {
-            v = 1 - double(size - 1) / size * eposilon;
+            v = 1 - double(size - 1) / size * epsilon;
         } else {
-            v = 1. / size * eposilon;
+            v = 1. / size * epsilon;
         }
     });
     return std::forward<T>(policy);
 }
-inline std::vector<double> toEGreedy(size_t policyCount, size_t maxargIndex, double eposilon) {
-    double star = 1 - double(policyCount - 1) / policyCount * eposilon;
-    double other = 1. / policyCount * eposilon;
+inline std::vector<double> toEGreedy(size_t policyCount, size_t maxargIndex, double epsilon) {
+    double star = 1 - double(policyCount - 1) / policyCount * epsilon;
+    double other = 1. / policyCount * epsilon;
     std::vector<double> tmp(policyCount, other);
     tmp[maxargIndex] = star;
     return tmp;
 }
-inline void toEGreedy(std::vector<double>& policy, size_t policyCount, size_t maxargIndex, double eposilon) {
+inline void toEGreedy(std::vector<double>& policy, size_t policyCount, size_t maxargIndex, double epsilon) {
     assert(policy.size() == policyCount);
-    double star = 1 - double(policyCount - 1) / policyCount * eposilon;
-    double other = 1. / policyCount * eposilon;
+    double star = 1 - double(policyCount - 1) / policyCount * epsilon;
+    double other = 1. / policyCount * epsilon;
     for (size_t i = 0; i < policyCount; ++i) {
         policy[i] = i == maxargIndex? star: other;
     }
@@ -47,90 +49,64 @@ struct Experience {
     ActionType action;
     double reward;
     AbstractBlock *nextState;
-    ActionType nextAction;
 };
 
-template <class _MultiplyFunctor>
-class EGreedyMonteCarlo {
+class TabularMethod {
+protected:
     std::vector<std::vector<double>> qValues;
     std::vector<std::vector<double>> policies;
-    std::vector<std::vector<size_t>> ns;
     const Playground& playground;
-    size_t episodeLength;
     double discount;
-    double epsilon;
-    _MultiplyFunctor alphaFunctor;
-
 public:
-    EGreedyMonteCarlo(const Playground& playground, size_t episodeLength, double discount, double epsilon, _MultiplyFunctor&& alphaFunctor)
-        : qValues(playground.height * playground.width, std::vector<double>(size_t(5), double(0)))
-        , policies(playground.height * playground.width, toEGreedy(std::vector<double>{0, 0, 0, 0, 1}, epsilon))
-        , ns(playground.height * playground.width, std::vector<size_t>(5, 0))
-        , playground(playground) 
-        , episodeLength(episodeLength)
+    TabularMethod(const Playground& playground, double discount, std::vector<double> policiesActionTemplate = std::vector<double>(sizeof(ACTION_COUNTS)))
+        : qValues(playground.width * playground.height, std::vector<double>(size_t(ACTION_COUNTS))) 
+        , policies(playground.width * playground.height, policiesActionTemplate)
+        , playground(playground)
         , discount(discount)
-        , epsilon(epsilon)
-        , alphaFunctor(std::forward<_MultiplyFunctor>(alphaFunctor))
     {}
-    std::vector<std::vector<double>>& getPolicies() { return const_cast<std::vector<std::vector<double>>&>(const_cast<const EGreedyMonteCarlo<_MultiplyFunctor>&>(*this).getPolicies()); }
+    std::vector<std::vector<double>>& getPolicies() { return const_cast<std::vector<std::vector<double>>&>(const_cast<const TabularMethod&>(*this).getPolicies()); }
     const std::vector<std::vector<double>>& getPolicies() const { return policies; }
-    void run() { run(this->epsilon); }
-    void run(double epsilon) {
+    virtual void train(double epsilon, double learningRate, size_t length) = 0;
+    virtual ~TabularMethod() = default;
+};
+
+class MonteCarlo: public TabularMethod {
+public:
+    MonteCarlo(const Playground& playground, double discount)
+        : TabularMethod(playground, discount, toEGreedy(ACTION_COUNTS, 0, 1.))
+    {}
+    void train(double epsilon, double learningRate, size_t length) override {
         std::vector<Step> episode = std::vector<Step>();
         double g = 0;
-
         AbstractBlock *currentState = playground.sample();
-        // AbstractBlock *currentState = playground.map[playground.width - 1].get();
-        for (size_t i = 0; i < episodeLength; ++i) {
+        for (size_t i = 0; i < length; ++i) {
             size_t p = chooseAction(policies[currentState->getFlatten()], playground.gen);
             auto [nextState, reward] = playground.act(currentState, static_cast<ActionType>(p));
             episode.push_back(Step{currentState, static_cast<ActionType>(p), reward});
             currentState = nextState;
         }
-        for (ssize_t i = episodeLength - 1; i >= 0; --i) {
+        for (ssize_t i = length - 1; i >= 0; --i) {
             g = discount * g + episode[i].reward;
-            qValues[episode[i].state->getFlatten()][size_t(episode[i].action)] += alphaFunctor(ns[episode[i].state->getFlatten()][size_t(episode[i].action)]) * (g - qValues[episode[i].state->getFlatten()][size_t(episode[i].action)]);
+            qValues[episode[i].state->getFlatten()][size_t(episode[i].action)] += learningRate * (g - qValues[episode[i].state->getFlatten()][size_t(episode[i].action)]);
         }
         for (size_t i = 0; i < qValues.size(); ++i) {
             toEGreedy(policies[i], 5, std::distance(qValues[i].cbegin(), std::max_element(qValues[i].cbegin(), qValues[i].cend())), epsilon);
         }
-        return;
     }
-    friend void mcDemo(const std::string&, double, double);
 };
 
-template <class _MultiplyFunctor>
-class Sarsa {
-    std::vector<std::vector<double>> qValues;
-    std::vector<std::vector<double>> policies;
-    std::vector<std::vector<size_t>> ns;
-    const Playground& playground;
-    size_t episodeLength;
-    double discount;
-    double epsilon;
-    _MultiplyFunctor alphaFunctor;
+class Sarsa: public TabularMethod {
 public:
-    Sarsa(const Playground& playground, size_t episodeLength,  double discount, double epsilon, _MultiplyFunctor&& alphaFunctor)
-        : qValues(playground.height * playground.width, std::vector<double>(size_t(5), 0.))
-        , policies(playground.height * playground.width, toEGreedy(std::vector<double>{0, 0, 0, 0, 1}, epsilon))
-        , ns(playground.height * playground.width, std::vector<size_t>(5, 0))
-        , playground(playground) 
-        , episodeLength(episodeLength)
-        , discount(discount)
-        , epsilon(epsilon)
-        , alphaFunctor(std::forward<_MultiplyFunctor>(alphaFunctor))
+    Sarsa(const Playground& playground, double discount)
+        : TabularMethod(playground, discount, toEGreedy(ACTION_COUNTS, 0, 1.))
     {}
-    std::vector<std::vector<double>>& getPolicies() { return const_cast<std::vector<std::vector<double>>&>(const_cast<const Sarsa<_MultiplyFunctor>&>(*this).getPolicies()); }
-    const std::vector<std::vector<double>>& getPolicies() const { return policies; }
-    void run() { run(this->epsilon); }
-    void run(double epsilon) {
+    void train(double epsilon, double learningRate, size_t length) override {
         AbstractBlock *currentState = playground.sample();
-        // AbstractBlock *currentState = playground.map[0].get();
         size_t p = chooseAction(policies[currentState->getFlatten()], playground.gen);
-        for (size_t i = 0; i < episodeLength; ++i) {
+        for (size_t i = 0; i < length; ++i) {
             auto [nextState, reward] = playground.act(currentState, static_cast<ActionType>(p));
             size_t nextP = chooseAction(policies[nextState->getFlatten()], playground.gen);
-            qValues[currentState->getFlatten()][p] += alphaFunctor(ns[currentState->getFlatten()][p]) * (reward + discount * qValues[nextState->getFlatten()][nextP] - qValues[currentState->getFlatten()][p]);
+            qValues[currentState->getFlatten()][p] += learningRate * (reward + discount * qValues[nextState->getFlatten()][nextP] - qValues[currentState->getFlatten()][p]);
             toEGreedy(policies[currentState->getFlatten()], 5, std::distance(qValues[currentState->getFlatten()].cbegin(), std::max_element(qValues[currentState->getFlatten()].cbegin(), qValues[currentState->getFlatten()].cend())), epsilon);
             currentState = nextState;
             p = nextP;
@@ -138,85 +114,79 @@ public:
     }
 };
 
-template <class _MultiplyFunctor>
-class OnlineQLearning {
-    std::vector<std::vector<double>> qValues;
-    std::vector<std::vector<double>> policies;
-    std::vector<std::vector<size_t>> ns;
-    const Playground& playground;
-    size_t episodeLength;
-    double discount;
-    double epsilon;
-    _MultiplyFunctor alphaFunctor;
+class QLearning: public TabularMethod {
 public:
-    OnlineQLearning(const Playground& playground, size_t episodeLength,  double discount, double epsilon, _MultiplyFunctor&& alphaFunctor)
-        : qValues(playground.height * playground.width, std::vector<double>(size_t(5), 0.))
-        , policies(playground.height * playground.width, toEGreedy(std::vector<double>{0, 0, 0, 0, 1}, epsilon))
-        , ns(playground.height * playground.width, std::vector<size_t>(5, 0))
-        , playground(playground) 
-        , episodeLength(episodeLength)
-        , discount(discount)
-        , epsilon(epsilon)
-        , alphaFunctor(std::forward<_MultiplyFunctor>(alphaFunctor))
+    QLearning(const Playground& playground, double discount)
+        : TabularMethod(playground, discount, toEGreedy(ACTION_COUNTS, 0, 1.))
     {}
-    std::vector<std::vector<double>>& getPolicies() { return const_cast<std::vector<std::vector<double>>&>(const_cast<const OnlineQLearning<_MultiplyFunctor>&>(*this).getPolicies()); }
-    const std::vector<std::vector<double>>& getPolicies() const { return policies; }
-    void run() { run(this->epsilon); }
-    void run(double epsilon) {
-        AbstractBlock *currentState = playground.sample();
-        // AbstractBlock *currentState = playground.map[0].get();
-        size_t p = chooseAction(policies[currentState->getFlatten()], playground.gen);
-        for (size_t i = 0; i < episodeLength; ++i) {
-            auto [nextState, reward] = playground.act(currentState, static_cast<ActionType>(p));
-            size_t nextP = chooseAction(policies[nextState->getFlatten()], playground.gen);
-            qValues[currentState->getFlatten()][p] += alphaFunctor(ns[currentState->getFlatten()][p]) * (reward + discount * *std::max_element(qValues[nextState->getFlatten()].cbegin(), qValues[nextState->getFlatten()].cend()) - qValues[currentState->getFlatten()][p]);
-            toEGreedy(policies[currentState->getFlatten()], 5, std::distance(qValues[currentState->getFlatten()].cbegin(), std::max_element(qValues[currentState->getFlatten()].cbegin(), qValues[currentState->getFlatten()].cend())), epsilon);
-            currentState = nextState;
-            p = nextP;
-        }
+    void train(double epsilon, double learningRate, size_t length) override {
+        train(epsilon, learningRate, length, policies);
     }
-};
-
-template <class _MultiplyFunctor>
-class OfflineQLearning {
-    std::vector<std::vector<double>> qValues;
-    std::vector<std::vector<double>> behaviorPolicies;
-    std::vector<std::vector<double>> targetPolicies;
-    std::vector<std::vector<size_t>> ns;
-    const Playground& playground;
-    size_t episodeLength;
-    double discount;
-    double epsilon;
-    _MultiplyFunctor alphaFunctor;
-public:
-    OfflineQLearning(const Playground& playground, size_t episodeLength,  double discount, double epsilon, _MultiplyFunctor&& alphaFunctor)
-        : qValues(playground.height * playground.width, std::vector<double>(size_t(5), 0.))
-        , behaviorPolicies(playground.height * playground.width, std::vector<double>(size_t(5), 1. / 5))
-        , targetPolicies(playground.height * playground.width, std::vector<double>(size_t(5), 0.))
-        , ns(playground.height * playground.width, std::vector<size_t>(5, 0))
-        , playground(playground) 
-        , episodeLength(episodeLength)
-        , discount(discount)
-        , epsilon(epsilon)
-        , alphaFunctor(std::forward<_MultiplyFunctor>(alphaFunctor))
-    {}
-    std::vector<std::vector<double>>& getPolicies() { return const_cast<std::vector<std::vector<double>>&>(const_cast<const OfflineQLearning<_MultiplyFunctor>&>(*this).getPolicies()); }
-    const std::vector<std::vector<double>>& getPolicies() const { return targetPolicies; }
-    void run() { run(this->epsilon); }
-    void run(double epsilon) {
-        AbstractBlock *currentState = playground.sample();
-        // AbstractBlock *currentState = playground.map[0].get();
+    void train(double epsilon, double learningRate, size_t length, const std::vector<std::vector<double>>& behaviorPolicies) {
+         AbstractBlock *currentState = playground.sample();
         size_t p = chooseAction(behaviorPolicies[currentState->getFlatten()], playground.gen);
-        for (size_t i = 0; i < episodeLength; ++i) {
+        for (size_t i = 0; i < length; ++i) {
             auto [nextState, reward] = playground.act(currentState, static_cast<ActionType>(p));
             size_t nextP = chooseAction(behaviorPolicies[nextState->getFlatten()], playground.gen);
-            qValues[currentState->getFlatten()][p] += alphaFunctor(ns[currentState->getFlatten()][p]) * (reward + discount * *std::max_element(qValues[nextState->getFlatten()].cbegin(), qValues[nextState->getFlatten()].cend()) - qValues[currentState->getFlatten()][p]);
-            for (size_t i = 0, argmax = std::distance(qValues[currentState->getFlatten()].cbegin(), std::max_element(qValues[currentState->getFlatten()].cbegin(), qValues[currentState->getFlatten()].cend())); i < 5; ++i) {
-                targetPolicies[currentState->getFlatten()][i] = i == argmax? 1.: 0.;
-            }
+            qValues[currentState->getFlatten()][p] += learningRate * (reward + discount * *std::max_element(qValues[nextState->getFlatten()].cbegin(), qValues[nextState->getFlatten()].cend()) - qValues[currentState->getFlatten()][p]);
+            toEGreedy(policies[currentState->getFlatten()], 5, std::distance(qValues[currentState->getFlatten()].cbegin(), std::max_element(qValues[currentState->getFlatten()].cbegin(), qValues[currentState->getFlatten()].cend())), epsilon);
             currentState = nextState;
             p = nextP;
         }
+   }
+   void explore(double epsilon, double learningRate, size_t length) {
+        train(epsilon, learningRate, length, std::vector<std::vector<double>>(playground.height * playground.width, std::vector<double>(ACTION_COUNTS, 1. / ACTION_COUNTS)));
+   }
+};
+
+class DeepQNetwork {
+    Network targetNetwork;
+    Network qNetwork;
+    std::vector<Experience> expPool;
+    const Playground& playground;
+    double discount;
+public:
+    DeepQNetwork(const Playground& playground, double discount)
+        : targetNetwork(2, ACTION_COUNTS, std::vector<size_t>{128}, std::vector<ActivationFunctions>{ActivationFunctions::LEAKYRELU}, ActivationFunctions::LEAKYRELU, LossFunctions::MSE)
+        , qNetwork(targetNetwork)
+        , expPool()
+        , playground(playground)
+        , discount(discount)
+    {}
+    Network& getTargetNetwork() { return targetNetwork; }
+    const Network& getTargetNetwork() const { return targetNetwork; }
+    void expReplay(double epsilon, size_t length) {
+        expPool.resize(length);
+        AbstractBlock *currentState = playground.map[9 * 10 + 8].get();
+        for (size_t i = 0; i < length; ++i) {
+            std::valarray<double> qValues = targetNetwork.run({double(currentState->getX()), double(currentState->getY())});
+            ActionType action = static_cast<ActionType>(std::distance(std::cbegin(qValues), std::max_element(std::cbegin(qValues), std::cend(qValues))));
+            ActionType finalAction = static_cast<ActionType>(chooseAction(toEGreedy(ACTION_COUNTS, size_t(action), epsilon), playground.gen));
+            auto [nextState, reward] = playground.act(currentState, finalAction);
+            expPool[i] = Experience{currentState, finalAction, reward, nextState};
+            currentState = nextState;
+        }
+    }
+    void expReplay(size_t length) {
+        expPool.resize(length);
+        AbstractBlock *currentState = playground.map[9 * 10 + 8].get();
+        for (size_t i = 0; i < length; ++i) {
+            ActionType action = static_cast<ActionType>(std::uniform_int_distribution(0, ACTION_COUNTS - 1)(playground.gen));
+            auto [nextState, reward] = playground.act(currentState, action);
+            expPool[i] = Experience{currentState, action, reward, nextState};
+            currentState = nextState;
+        }
+    }
+    void train(double learningRate, size_t batchLength) {
+        for (size_t i = 0; i < batchLength; ++i) {
+            const Experience& exp = expPool[std::uniform_int_distribution(size_t(0), expPool.size() - 1)(playground.gen)];
+            std::valarray<double> qValues = qNetwork.run({double(exp.state->getX()), double(exp.state->getY())});
+            std::valarray<double> nextQValues = targetNetwork.run({double(exp.nextState->getX()), double(exp.nextState->getY())});
+            qValues[size_t(exp.action)] = exp.reward + discount * *std::max_element(std::cbegin(nextQValues), std::cend(nextQValues));
+            qNetwork.train({double(exp.state->getX()), double(exp.state->getY())}, qValues, learningRate);
+            // qNetwork.train({double(exp.state->getX()), double(exp.state->getY())}, {double(exp.state->getX()), double(exp.state->getY()), std::pow(exp.state->getX(), 2), std::pow(exp.state->getY(), 2), 1.}, learningRate);       //debug
+        }
+        targetNetwork = qNetwork;
     }
 };
 
@@ -224,8 +194,8 @@ inline void showPolicy(const std::vector<std::vector<double>>& policy, const Pla
     for (uint16_t h = 0; h < playground.height; ++h) {
         for (uint16_t w = 0; w < playground.width; ++w) {
             const auto& aPolicy = policy[h * playground.width + w];
-            auto argmexPolicy = std::distance(aPolicy.cbegin(), std::max_element(aPolicy.cbegin(), aPolicy.cend()));
-            switch (argmexPolicy) {
+            auto argmaxPolicy = std::distance(aPolicy.cbegin(), std::max_element(aPolicy.cbegin(), aPolicy.cend()));
+            switch (argmaxPolicy) {
                 case 0:
                     os << "∧";
                     break;
@@ -250,3 +220,48 @@ inline void showPolicy(const std::vector<std::vector<double>>& policy, const Pla
     }
 }
 
+inline void showPolicy(Network& qValues, const Playground& playground, std::ostream& os = std::cout) {
+    for (uint16_t h = 0; h < playground.height; ++h) {
+        for (uint16_t w = 0; w < playground.width; ++w) {
+            const auto& aPolicy = qValues.run({double(w), double(h)});
+            auto argmaxPolicy = std::distance(std::cbegin(aPolicy), std::max_element(std::cbegin(aPolicy), std::cend(aPolicy)));
+            // std::cout << aPolicy[0] << ' ' << aPolicy[1] << ' ' << aPolicy[2] << ' ' << aPolicy[3] << ' ' << aPolicy[4] << "\r\n";      //debug
+            switch (argmaxPolicy) {
+                case 0:
+                    os << "∧";
+                    break;
+                case 1:
+                    os << ">";
+                    break;
+                case 2:
+                    os << "∨";
+                    break;
+                case 3:
+                    os << "<";
+                    break;
+                case 4:
+                    os << "o";
+                    break;
+                default:
+                    throw std::runtime_error{"bad policy"};
+            }
+            std::cout << " ";
+        }
+        std::cout << "\r\n";
+    }
+}
+
+inline void printQValues(Network& qValues, const Playground& playground, std::ostream& os = std::cout) {
+    for (uint16_t h = 0; h < playground.height; ++h) {
+        for (uint16_t w = 0; w < playground.width; ++w) {
+            const auto& aPolicy = qValues.run({double(w), double(h)});
+            os << "h: " << h 
+                      << "; w: " << w 
+                      << " {";
+            for (size_t i = 0; i < ACTION_COUNTS; ++i) {
+                os << aPolicy[i] << ", ";
+            }
+            os << '}' << "\r\n";
+        }
+    }
+}

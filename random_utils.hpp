@@ -4,8 +4,8 @@
 #include <random>
 #include <stdexcept>
 
-template <template <class, class> class T, class Alloc, typename = std::enable_if_t<std::is_same_v<std::remove_cv_t<std::remove_reference_t<T<double, Alloc>>>, std::vector<double, Alloc>>>>
-size_t chooseAction(const T<double, Alloc>& policy, std::mt19937& gen) {
+template <template <class...> class T, class... Args, typename = std::enable_if_t<std::is_same_v<std::remove_cv_t<std::remove_reference_t<T<double, Args...>>>, std::vector<double, Args...>>>>
+size_t chooseAction(const T<double, Args...>& policy, std::mt19937& gen) {
     double acc = 0;
     double d = std::uniform_real_distribution(0., 1.)(gen);
     for (size_t i = 0; i < policy.size(); ++i) {

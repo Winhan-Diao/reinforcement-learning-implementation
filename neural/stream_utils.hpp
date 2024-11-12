@@ -3,7 +3,7 @@
 #include <iostream>
 #include <cstring>
 
-static void inputTill(std::istream& is, std::string& buffer, const std::string& delimiter) {
+static void inputTill(std::istream& is,  std::string& buffer, const std::string& delimiter) {
     static constexpr ssize_t tmp_buffer_size = 2048;
     ssize_t delimiter_matched_pos = 0;
     ssize_t delimiter_end_pos = delimiter.length();

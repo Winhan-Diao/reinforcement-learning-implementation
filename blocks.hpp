@@ -7,7 +7,7 @@ class Playground;
 #include "playground.hpp"
 #define R_DEST 1.0
 #define R_NORM 0.0
-#define R_BOUND 1E-10
+#define R_BOUND -1.0
 #define R_FORBID -1.0
 #define R_WALL 0.0
 
@@ -79,10 +79,11 @@ class AbstractBlock {
 protected:
     uint16_t x;
     uint16_t y;
+    uint16_t flatten;
     const Playground& playground;
 public:
     AbstractBlock() = default;
-    AbstractBlock(uint16_t x, uint16_t y, const Playground& playground): x(x), y(y), playground(playground) {};
+    AbstractBlock(uint16_t x, uint16_t y, const Playground& playground);
     // i.isValid; ii.reward 
     virtual std::pair<bool, double> stepIn() = 0;
     // i.nextBlock; ii.reward

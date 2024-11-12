@@ -1,5 +1,7 @@
 #include "blocks.hpp"
 
+AbstractBlock::AbstractBlock(uint16_t x, uint16_t y, const Playground& playground): x(x), y(y), flatten(playground.width * y + x), playground(playground) {};
+
 std::pair<AbstractBlock *, double> AbstractBlock::stepOut(const ActionType& action) {
     if (inBound(action, playground.width, playground.height, x, y)) {
         auto movement = getMovement(action, playground.width);
@@ -9,7 +11,7 @@ std::pair<AbstractBlock *, double> AbstractBlock::stepOut(const ActionType& acti
     }
 }
 
-uint16_t AbstractBlock::getFlatten() const { return y * playground.width + x; }
+uint16_t AbstractBlock::getFlatten() const { return flatten; }
 
 std::pair<AbstractBlock *, double> SwampBlock::stepOut(const ActionType& action) {
     return std::uniform_int_distribution(0, 1)(playground.gen)? AbstractBlock::stepOut(action): std::pair<AbstractBlock *, double>{this, 0}; 
