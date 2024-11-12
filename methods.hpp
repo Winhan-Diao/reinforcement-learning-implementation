@@ -72,6 +72,8 @@ public:
         , epsilon(epsilon)
         , alphaFunctor(std::forward<_MultiplyFunctor>(alphaFunctor))
     {}
+    std::vector<std::vector<double>>& getPolicies() { return const_cast<std::vector<std::vector<double>>&>(const_cast<const EGreedyMonteCarlo<_MultiplyFunctor>&>(*this).getPolicies()); }
+    const std::vector<std::vector<double>>& getPolicies() const { return policies; }
     void run() { run(this->epsilon); }
     void run(double epsilon) {
         std::vector<Step> episode = std::vector<Step>();
@@ -87,14 +89,14 @@ public:
         }
         for (ssize_t i = episodeLength - 1; i >= 0; --i) {
             g = discount * g + episode[i].reward;
-            qValues[episode[i].state->getFlatten()][size_t(episode[i].action)] += alphaFunctor(++ns[episode[i].state->getFlatten()][size_t(episode[i].action)]) * (g - qValues[episode[i].state->getFlatten()][size_t(episode[i].action)]);
+            qValues[episode[i].state->getFlatten()][size_t(episode[i].action)] += alphaFunctor(ns[episode[i].state->getFlatten()][size_t(episode[i].action)]) * (g - qValues[episode[i].state->getFlatten()][size_t(episode[i].action)]);
         }
         for (size_t i = 0; i < qValues.size(); ++i) {
             toEGreedy(policies[i], 5, std::distance(qValues[i].cbegin(), std::max_element(qValues[i].cbegin(), qValues[i].cend())), epsilon);
         }
         return;
     }
-    friend void mcDemo();
+    friend void mcDemo(const std::string&, double, double);
 };
 
 template <class _MultiplyFunctor>
@@ -118,6 +120,8 @@ public:
         , epsilon(epsilon)
         , alphaFunctor(std::forward<_MultiplyFunctor>(alphaFunctor))
     {}
+    std::vector<std::vector<double>>& getPolicies() { return const_cast<std::vector<std::vector<double>>&>(const_cast<const Sarsa<_MultiplyFunctor>&>(*this).getPolicies()); }
+    const std::vector<std::vector<double>>& getPolicies() const { return policies; }
     void run() { run(this->epsilon); }
     void run(double epsilon) {
         AbstractBlock *currentState = playground.sample();
@@ -126,13 +130,94 @@ public:
         for (size_t i = 0; i < episodeLength; ++i) {
             auto [nextState, reward] = playground.act(currentState, static_cast<ActionType>(p));
             size_t nextP = chooseAction(policies[nextState->getFlatten()], playground.gen);
-            qValues[currentState->getFlatten()][p] += alphaFunctor(++ns[currentState->getFlatten()][p]) * (reward + discount * qValues[nextState->getFlatten()][nextP] - qValues[currentState->getFlatten()][p]);
+            qValues[currentState->getFlatten()][p] += alphaFunctor(ns[currentState->getFlatten()][p]) * (reward + discount * qValues[nextState->getFlatten()][nextP] - qValues[currentState->getFlatten()][p]);
             toEGreedy(policies[currentState->getFlatten()], 5, std::distance(qValues[currentState->getFlatten()].cbegin(), std::max_element(qValues[currentState->getFlatten()].cbegin(), qValues[currentState->getFlatten()].cend())), epsilon);
             currentState = nextState;
             p = nextP;
         }
     }
-    friend void sarsaDemo();
+};
+
+template <class _MultiplyFunctor>
+class OnlineQLearning {
+    std::vector<std::vector<double>> qValues;
+    std::vector<std::vector<double>> policies;
+    std::vector<std::vector<size_t>> ns;
+    const Playground& playground;
+    size_t episodeLength;
+    double discount;
+    double epsilon;
+    _MultiplyFunctor alphaFunctor;
+public:
+    OnlineQLearning(const Playground& playground, size_t episodeLength,  double discount, double epsilon, _MultiplyFunctor&& alphaFunctor)
+        : qValues(playground.height * playground.width, std::vector<double>(size_t(5), 0.))
+        , policies(playground.height * playground.width, toEGreedy(std::vector<double>{0, 0, 0, 0, 1}, epsilon))
+        , ns(playground.height * playground.width, std::vector<size_t>(5, 0))
+        , playground(playground) 
+        , episodeLength(episodeLength)
+        , discount(discount)
+        , epsilon(epsilon)
+        , alphaFunctor(std::forward<_MultiplyFunctor>(alphaFunctor))
+    {}
+    std::vector<std::vector<double>>& getPolicies() { return const_cast<std::vector<std::vector<double>>&>(const_cast<const OnlineQLearning<_MultiplyFunctor>&>(*this).getPolicies()); }
+    const std::vector<std::vector<double>>& getPolicies() const { return policies; }
+    void run() { run(this->epsilon); }
+    void run(double epsilon) {
+        AbstractBlock *currentState = playground.sample();
+        // AbstractBlock *currentState = playground.map[0].get();
+        size_t p = chooseAction(policies[currentState->getFlatten()], playground.gen);
+        for (size_t i = 0; i < episodeLength; ++i) {
+            auto [nextState, reward] = playground.act(currentState, static_cast<ActionType>(p));
+            size_t nextP = chooseAction(policies[nextState->getFlatten()], playground.gen);
+            qValues[currentState->getFlatten()][p] += alphaFunctor(ns[currentState->getFlatten()][p]) * (reward + discount * *std::max_element(qValues[nextState->getFlatten()].cbegin(), qValues[nextState->getFlatten()].cend()) - qValues[currentState->getFlatten()][p]);
+            toEGreedy(policies[currentState->getFlatten()], 5, std::distance(qValues[currentState->getFlatten()].cbegin(), std::max_element(qValues[currentState->getFlatten()].cbegin(), qValues[currentState->getFlatten()].cend())), epsilon);
+            currentState = nextState;
+            p = nextP;
+        }
+    }
+};
+
+template <class _MultiplyFunctor>
+class OfflineQLearning {
+    std::vector<std::vector<double>> qValues;
+    std::vector<std::vector<double>> behaviorPolicies;
+    std::vector<std::vector<double>> targetPolicies;
+    std::vector<std::vector<size_t>> ns;
+    const Playground& playground;
+    size_t episodeLength;
+    double discount;
+    double epsilon;
+    _MultiplyFunctor alphaFunctor;
+public:
+    OfflineQLearning(const Playground& playground, size_t episodeLength,  double discount, double epsilon, _MultiplyFunctor&& alphaFunctor)
+        : qValues(playground.height * playground.width, std::vector<double>(size_t(5), 0.))
+        , behaviorPolicies(playground.height * playground.width, std::vector<double>(size_t(5), 1. / 5))
+        , targetPolicies(playground.height * playground.width, std::vector<double>(size_t(5), 0.))
+        , ns(playground.height * playground.width, std::vector<size_t>(5, 0))
+        , playground(playground) 
+        , episodeLength(episodeLength)
+        , discount(discount)
+        , epsilon(epsilon)
+        , alphaFunctor(std::forward<_MultiplyFunctor>(alphaFunctor))
+    {}
+    std::vector<std::vector<double>>& getPolicies() { return const_cast<std::vector<std::vector<double>>&>(const_cast<const OfflineQLearning<_MultiplyFunctor>&>(*this).getPolicies()); }
+    const std::vector<std::vector<double>>& getPolicies() const { return targetPolicies; }
+    void run() { run(this->epsilon); }
+    void run(double epsilon) {
+        AbstractBlock *currentState = playground.sample();
+        // AbstractBlock *currentState = playground.map[0].get();
+        size_t p = chooseAction(behaviorPolicies[currentState->getFlatten()], playground.gen);
+        for (size_t i = 0; i < episodeLength; ++i) {
+            auto [nextState, reward] = playground.act(currentState, static_cast<ActionType>(p));
+            size_t nextP = chooseAction(behaviorPolicies[nextState->getFlatten()], playground.gen);
+            qValues[currentState->getFlatten()][p] += alphaFunctor(ns[currentState->getFlatten()][p]) * (reward + discount * *std::max_element(qValues[nextState->getFlatten()].cbegin(), qValues[nextState->getFlatten()].cend()) - qValues[currentState->getFlatten()][p]);
+            for (size_t i = 0, argmax = std::distance(qValues[currentState->getFlatten()].cbegin(), std::max_element(qValues[currentState->getFlatten()].cbegin(), qValues[currentState->getFlatten()].cend())); i < 5; ++i) {
+                targetPolicies[currentState->getFlatten()][i] = i == argmax? 1.: 0.;
+            }
+            currentState = nextState;
+            p = nextP;
+        }
+    }
 };
 
 inline void showPolicy(const std::vector<std::vector<double>>& policy, const Playground& playground, std::ostream& os = std::cout) {
