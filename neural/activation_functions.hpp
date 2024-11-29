@@ -1,8 +1,25 @@
 #pragma once
-#include <memory>
-#include <stdexcept>
 #include <valarray>
 #include <functional>
+#include "traits.hpp"
+#define EXP_700_ 1.0142320547350045094553295952313e+304
+#define EXP_N700_ 9.8596765437597708567053729478495e-305
+
+using namespace std::literals;
+
+// template <template <typename> typename T, typename V,  class U = decltype("valarr"s)>
+// static void printValarray(const T<V>& valarr, U&& name = "valarr"s) {
+//     std::cout << name << ": {"s;
+//     std::for_each(std::cbegin(valarr), std::cend(valarr), [&valarr](const auto& a){
+//         if constexpr (is_valarray<V>::value) {
+//             printValarray(a, "innerVArr"s);
+//         } else {
+//             std::cout << a;
+//         }
+//         std::cout << ((&a == std::cend(valarr) - 1)? ""s : ", "s);
+//     });
+//     std::cout << "}"s << "\r\n"s;
+// }
 
 enum class ActivationFunctions {
     INVALID,
@@ -12,6 +29,10 @@ enum class ActivationFunctions {
     LEAKYRELU,
     PRRELU,
     SOFTMAX,
+    STABLE_SOFTMAX,
+    STABLE_SOFTMAX_V3,
+    LOG_SOFTMAX,
+    TAYLOR_SOFTMAX,
     CUBEROOT,
     SGNEXP,
 };
@@ -19,7 +40,6 @@ enum class ActivationFunctions {
 struct ActivationFunction {
     virtual std::valarray<double> operator() (const std::valarray<double>& x) = 0;
     virtual std::valarray<double> derivative(const std::valarray<double>& y, const std::valarray<double>& usGrad) = 0;
-    // static std::unique_ptr<ActivationFunction> buildActivationFunction(const ActivationFunctions& n);
 };
 
 struct Sigmoid: ActivationFunction {
@@ -98,8 +118,71 @@ struct Softmax: ActivationFunction {
         return std::move(expX) / expSum;
     }
     std::valarray<double> derivative(const std::valarray<double>& y, const std::valarray<double>& usGrad) override {
-        double sum = (y * usGrad).sum();
-        return -y * (sum - usGrad);
+        // double sum = (y * usGrad).sum();
+        // return -y * (sum - usGrad);                                                      // wrong
+        return y * (y.sum() * usGrad - (y * usGrad).sum());
+    }
+};
+
+struct StableSoftmax: ActivationFunction {
+    std::valarray<double> operator() (const std::valarray<double>& x) override {
+        auto expX = std::exp(x - x.max());
+        double expSum = expX.sum();
+        return std::move(expX) / expSum;
+    }
+    std::valarray<double> derivative(const std::valarray<double>& y, const std::valarray<double>& usGrad) override {                                                     // wrong
+        return y * (y.sum() * usGrad - (y * usGrad).sum());
+        // return (y.sum() * usGrad - (y * usGrad).sum()) / std::pow(y.sum(), 2) * y;       // redundant
+    }
+};
+
+struct[[deprecated]] StableSoftmaxV2: ActivationFunction {
+    std::valarray<double> operator() (const std::valarray<double>& x) override {
+        auto clampedX = x.apply([](double d) ->double { return std::clamp(d, -700., 700.); });
+        auto expX = std::exp(clampedX - clampedX.max());
+        double expSum = expX.sum();
+        return std::move(expX) / expSum;
+    }
+    std::valarray<double> derivative(const std::valarray<double>& y, const std::valarray<double>& usGrad) override {
+        return (y * (y.sum() * usGrad - (y * usGrad).sum())).apply([](double d) ->double { return (d > EXP_700_ || d < EXP_N700_)? 0.0: d; });
+        // return (y.sum() * usGrad - (y * usGrad).sum()) / std::pow(y.sum(), 2) * y;       // redundant
+    }
+};
+
+struct StableSoftmaxV3: ActivationFunction {
+    std::valarray<double> operator() (const std::valarray<double>& x) override {
+        auto clampedX = std::tanh(x / 50) * 50;
+        auto expX = std::exp(clampedX - clampedX.max());
+        double expSum = expX.sum();
+        return std::move(expX) / expSum;
+    }
+    std::valarray<double> derivative(const std::valarray<double>& y, const std::valarray<double>& usGrad) override {
+        // printValarray(usGrad);
+        return y * (y.sum() * usGrad - (y * usGrad).sum()) * (-std::pow(std::log(y) / 50, 2) + 1);
+        // return (y.sum() * usGrad - (y * usGrad).sum()) / std::pow(y.sum(), 2) * y;       // redundant
+    }
+};
+
+struct LogSoftMax: ActivationFunction {
+    std::valarray<double> operator() (const std::valarray<double>& x) override {
+        double xMax = x.max();
+        auto expX = std::exp(x - xMax);
+        double expSum = expX.sum();
+        return -x + log(expSum) + xMax;
+    }
+    std::valarray<double> derivative(const std::valarray<double>& y, const std::valarray<double>& usGrad) override {
+        return std::exp(y) * usGrad.sum() - usGrad;
+    }
+};
+
+struct[[deprecated]] TaylorSoftmax: ActivationFunction {
+    std::valarray<double> operator() (const std::valarray<double>& x) override {
+        auto taylor = 0.5 * std::pow(x, 2) + x + 1;
+        double taylorSum = taylor.sum();
+        return std::move(taylor) / std::move(taylorSum);
+    }
+    std::valarray<double> derivative(const std::valarray<double>& y, const std::valarray<double>& usGrad) override {
+        return (y.sum() * usGrad - (y * usGrad).sum()) / std::pow(y.sum(), 2) * std::sqrt(2 * y - 1);
     }
 };
 
@@ -135,6 +218,14 @@ static std::unique_ptr<ActivationFunction> buildActivationFunction(const Activat
             return std::make_unique<PrRelu>();
         case ActivationFunctions::SOFTMAX:
             return std::make_unique<Softmax>();
+        case ActivationFunctions::STABLE_SOFTMAX:
+            return std::make_unique<StableSoftmax>();
+        case ActivationFunctions::STABLE_SOFTMAX_V3:
+            return std::make_unique<StableSoftmaxV3>();
+        case ActivationFunctions::LOG_SOFTMAX:
+            return std::make_unique<LogSoftMax>();
+        case ActivationFunctions::TAYLOR_SOFTMAX:
+            return std::make_unique<TaylorSoftmax>();
         case ActivationFunctions::CUBEROOT:
             return std::make_unique<CubeRoot>();
         case ActivationFunctions::SGNEXP:

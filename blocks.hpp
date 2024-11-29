@@ -7,7 +7,7 @@ class Playground;
 #include "playground.hpp"
 #define R_DEST 1.0
 #define R_NORM 0.0
-#define R_BOUND -1.0
+#define R_BOUND -0.0
 #define R_FORBID -1.0
 #define R_WALL 0.0
 

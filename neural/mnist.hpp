@@ -65,7 +65,7 @@ std::valarray<std::valarray<double>> classifyLabels(const std::valarray<double>&
     return neo;
 }
 
-int getGreatestLabel(const std::valarray<double>& labels) {
+std::ptrdiff_t getGreatestLabel(const std::valarray<double>& labels) {
     return std::distance(std::cbegin(labels), std::max_element(std::cbegin(labels), std::cend(labels)));
 }
 
